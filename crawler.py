@@ -1,35 +1,46 @@
 #!/usr/bin/python
 
+# Note: python > 2.5 required
+
 import pp
-#import re
 import time         # for sleep
-#import codecs       # for handling UTF
-#import os
+import os
 import sys
 import urllib2
-import zipfile
 import random
+import errno
+#import zipfile
+#import codecs       # for handling UTF
 
-userAgents = ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/37.0.2062.94 Safari/537.36",
+LocalRun = (len(sys.argv) > 2 and (sys.argv[2] == '--local'))
 
-        ]
-basePath = '/vol/temp_data/'
+userAgents = [
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/37.0.2062.94 Safari/537.36",
+    "Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2; Trident/6.0)",
+    "Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:25.0) Gecko/20100101 Firefox/29.0"
+]
+basePath = '/tmp/books/' if LocalRun else '/vol/temp_data/'
 
 # download the contents of a url to the book's directory
-def _fetch_url_ ( url, fpath, headers):
+def _fetch_url_ (bookid, fpath, headers):
+    url = 'http://www.amazon.com/dp/'+str(bookid)
     success = False
+    maxTries = 5
     ntries = 0
     sleep = 2
     request = urllib2.Request(url,None,headers)
     
-    while not ntries < 5 :
+    while not success and ntries < maxTries:
         try: 
             response = urllib2.urlopen(request)
             if response.getcode() == 200:
                 success = True
-        except HTTPError, e:
+        except urllib2.HTTPError, e:
             print "HTTP Error:",e.code , url
-        except URLError, e:
+            if e.code == 404:
+                print "received 404, so skipping further retries"
+                ntries = maxTries
+        except urllib2.URLError, e:
             print "URL Error:",e.reason , url
             
         if success: 
@@ -43,22 +54,27 @@ def _fetch_url_ ( url, fpath, headers):
             # exponential backoff
             time.sleep(sleep**ntries)
             ntries+=1
-    return success
+    # need a good way to pass back the status of the call
+    return '' if success else bookid 
 
 def startJob(bookid,jobserver):
-    url = 'http://www.amazon.com/dp/'+str(bookid)
-    path = basePath + bookid 
-    headers = { 'User-Agent' : userAgents[random.RandInt(0,len(userAgents)],
-                'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9',
-                'Accept-Language' : 'en-US,en;q=0.8'
+    path = basePath + str(bookid) 
+    index = random.randint(0,len(userAgents)-1)
+    headers = {
+        'User-Agent' : userAgents[index],
+        'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9',
+        'Accept-Language' : 'en-US,en;q=0.8'
     }
-    return job_server.submit(_fetch_url_, (url,path,headers),(),('re','codecs','time','os','urllib','pp'))
+    def inner():
+        return _fetch_url_(bookid,path,headers)
+
+    return inner if LocalRun else jobserver.submit(_fetch_url_, (bookid,path,headers),(),('time','urllib2','pp'))
 
 def slicer(seq, size):
     return (seq[pos:pos + size] for pos in xrange(0, len(seq), size))
 
 
-## main ##
+########## main ##########
 
 filename = sys.argv[1]
 
@@ -67,26 +83,46 @@ with open(filename) as f:
 
 # start servers
 ppservers = ('node001','node002','node003','node004','node005','node006','node007','node008','node009','node010','node011','node012','node013','node014')
-job_server = pp.Server(ppservers=ppservers)
+job_server = pp.Server() if LocalRun else pp.Server(ppservers=ppservers)
 print "Starting pp with", job_server.get_ncpus(), "workers"
 
 
-# empty the temp directory
-files=os.listdir(basePath)
-for f in files:
-    os.remove(basePath + f)
+# set up the temp directory
+try:
+    os.makedirs(basePath)
+except OSError as exc: # Python >2.5
+    if exc.errno == errno.EEXIST and os.path.isdir(basePath):
+        # if the directory is already there, delete all contents
+        files=os.listdir(basePath)
+        for f in files:
+            os.remove(basePath + f)
+        pass
+    else: raise
 
 # grab the books 1000 at a time and fetch the urls; wait for the results and then zip them up
-total=len(book_ids)
-batchSize = 1000
-print "Total books to process are ",total
-for bslice in slicer(book_ids,batchSize)
+batchSize = 10 if LocalRun else 1000
+print "Total number of books to process is",len(book_ids)
+failedBooks = []
+for bslice in slicer(book_ids,batchSize):
     jobs=[]
     previous_time=time.time()
 
     jobs = map(lambda x: startJob(x,job_server), bslice)
     for job in jobs:
-        job()   
+        r = job()
+        if r != '': # fetch failed
+            failedBooks.append(r) 
+    print "Finished batch of size",batchSize
+    time.sleep(1)
+
+if (len(failedBooks) > 0):
+    local_file = open(basePath + 'incompleteBooks', "w")
+    for bkid in failedBooks:
+      local_file.write("%s\n" % bkid)
+    local_file.close()
+
+
+
     '''
     #print book
 #   print count, len(book_set)

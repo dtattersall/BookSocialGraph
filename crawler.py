@@ -1,18 +1,39 @@
 #!/usr/bin/python
 
-# Note: python > 2.5 required
+# Note: python >= 2.7 required
+# Note: you will need s3cmd installed from http://s3tools.org/, I was using 1.5.0-rc1 (http://sourceforge.net/projects/s3tools/files/s3cmd/1.5.0-rc1/s3cmd-1.5.0-rc1.tar.gz)
 
 import pp
 import time         # for sleep
 import os
+import shutil
 import sys
 import urllib2
 import random
 import errno
-#import zipfile
-#import codecs       # for handling UTF
+import argparse
+import zipfile
 
-LocalRun = (len(sys.argv) > 2 and (sys.argv[2] == '--local'))
+
+parser = argparse.ArgumentParser(description='Crawl a set of ISBNs on amazon.com')
+parser.add_argument('-i','--isbns', type=file, dest="filename", required=True, help='The file that contains the ISBNs to crawl')
+parser.add_argument('-n','--nodes', type=file, help='The file that contains the cluster slave nodes to use')
+parser.add_argument('-k','--secretkey', type=str, help='The secret key used to communicate with the cluster slave nodes')
+parser.add_argument('-s','--s3credentials', type=file, help='The file containing the S3 credentials required to upload:\n\tbucket=<bucketname>\n\taccessKey=<access key>\n\tsecretKey=<secret key>')
+args = parser.parse_args()
+
+LocalRun = (args.nodes == None)
+if LocalRun:
+    print "No slave nodes provided, assuming you just want to run on this machine and this is a LOCAL RUN"
+
+s3info = {}
+if (args.s3credentials != None):
+    s3lines = args.s3credentials.read().splitlines()
+    for line in s3lines:
+        kv = line.split('=')
+        s3info[str.lower(kv[0])] = kv[1]
+else:
+    print "No S3 credentials provided, we will store the files locally"
 
 userAgents = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/37.0.2062.94 Safari/537.36",
@@ -22,7 +43,9 @@ userAgents = [
 basePath = '/tmp/books/' if LocalRun else '/vol/temp_data/'
 
 # download the contents of a url to the book's directory
-def _fetch_url_ (bookid, fpath, headers):
+# TODO fix the names 
+#def _dummy_job(bookid, headers):
+def _fetch_url_ (bookid, headers):
     url = 'http://www.amazon.com/dp/'+str(bookid)
     success = False
     maxTries = 5
@@ -31,31 +54,35 @@ def _fetch_url_ (bookid, fpath, headers):
     request = urllib2.Request(url,None,headers)
     
     while not success and ntries < maxTries:
+        text = ''
         try: 
             response = urllib2.urlopen(request)
             if response.getcode() == 200:
                 success = True
         except urllib2.HTTPError, e:
-            print "HTTP Error:",e.code , url
+            print "When retrieving {0} received HTTP Error: {1}".format(url, e.code)
             if e.code == 404:
                 print "received 404, so skipping further retries"
                 ntries = maxTries
         except urllib2.URLError, e:
-            print "URL Error:",e.reason , url
+            print "URL Error:", e.reason , url
             
         if success: 
-            # Open our local file for writing
-            local_file = open(fpath, "w")
-            #Write to our local file
-            local_file.write(response.read())
-            local_file.close()
+            text = response.read()
             time.sleep(sleep) # sleep before trying next task 
         else:
             # exponential backoff
             time.sleep(sleep**ntries)
             ntries+=1
-    # need a good way to pass back the status of the call
-    return '' if success else bookid 
+    # note if text is '' then we assume this is an error
+    return (bookid, text)
+
+#def _fetch_url_ (bookid, headers):
+def _dummy_job(bookid, headers):
+    time.sleep(1)
+    text = 'Fake book data'
+    return (bookid, text)
+
 
 def startJob(bookid,jobserver):
     path = basePath + str(bookid) 
@@ -66,25 +93,49 @@ def startJob(bookid,jobserver):
         'Accept-Language' : 'en-US,en;q=0.8'
     }
     def inner():
-        return _fetch_url_(bookid,path,headers)
+        return _fetch_url_(bookid, headers)
 
-    return inner if LocalRun else jobserver.submit(_fetch_url_, (bookid,path,headers),(),('time','urllib2','pp'))
+    return inner if LocalRun else jobserver.submit(_fetch_url_, (bookid, headers),(),('time','urllib2','pp'))
 
 def slicer(seq, size):
     return (seq[pos:pos + size] for pos in xrange(0, len(seq), size))
 
+def rmall(filepath):
+    if os.path.isdir(filepath):
+        shutil.rmtree(filepath)
+    else:
+        os.remove(filepath)
+
+def uploadToS3(filepath):
+    if not bool(s3info): # test if the dictionary is empty
+        print "S3 credentials not defined... not uploading", filepath
+        return False
+
+    destination = os.path.basename(filepath)
+    cmd = "s3cmd --access_key={0} --secret_key={1} --mime-type=application/zip --no-progress --quiet put {2} s3://{3}/{4}".format(
+            s3info['accesskey'], s3info['secretkey'], filepath, s3info['bucket'], destination)
+    exitcode = os.system(cmd)
+    print "uploading",filepath,"to S3"
+    return (exitcode == 0)
+
+
 
 ########## main ##########
 
-filename = sys.argv[1]
-
-with open(filename) as f:
-    book_ids = f.read().splitlines()
+book_ids = args.filename.read().splitlines()
 
 # start servers
-ppservers = ('node001','node002','node003','node004','node005','node006','node007','node008','node009','node010','node011','node012','node013','node014')
-job_server = pp.Server() if LocalRun else pp.Server(ppservers=ppservers)
-print "Starting pp with", job_server.get_ncpus(), "workers"
+if LocalRun:
+    job_server = pp.Server()
+else:
+    ppservers = tuple(args.nodes.read().splitlines())
+    #print ppservers
+    #print args.secretkey
+    # TODO figure out why we can't communicate with other servers
+    job_server = pp.Server(ppservers=ppservers) if (args.secretkey == None) else pp.Server(ppservers=ppservers, secret=args.secretkey)
+
+print "Starting pp with", job_server.get_ncpus(), "cpus"
+print "We have", job_server.get_active_nodes(), "nodes"
 
 
 # set up the temp directory
@@ -95,64 +146,91 @@ except OSError as exc: # Python >2.5
         # if the directory is already there, delete all contents
         files=os.listdir(basePath)
         for f in files:
-            os.remove(basePath + f)
-        pass
+            rmall(basePath + f)
     else: raise
+
 
 # grab the books 1000 at a time and fetch the urls; wait for the results and then zip them up
 batchSize = 10 if LocalRun else 1000
 print "Total number of books to process is",len(book_ids)
 failedBooks = []
-for bslice in slicer(book_ids,batchSize):
+succeededBooks = []
+count = 0
+for bslice in slicer(book_ids, batchSize):
     jobs=[]
-    previous_time=time.time()
-
+    sliceName = str(min(bslice)) + '_' + str(max(bslice)) + '_' + str(count) 
+    zpath = basePath + sliceName +  '.zip'
+    outputPath = basePath + sliceName + '/'
+    processedBooks = []
+    
+    # Kick off the jobs
     jobs = map(lambda x: startJob(x,job_server), bslice)
+
+    # set up the slice's directory
+    try:
+        os.makedirs(outputPath)
+    except OSError as exc: # Python >2.5
+        if exc.errno == errno.EEXIST and os.path.isdir(outputPath):
+            # if the directory is already there, delete all contents
+            files=os.listdir(outputPath)
+            for f in files:
+                rmall(outputPath + f)
+            pass
+        else: raise
+
+    # block waiting for all the jobs to complete, then write outputs as appropriate
     for job in jobs:
-        r = job()
-        if r != '': # fetch failed
-            failedBooks.append(r) 
-    print "Finished batch of size",batchSize
+        (bkid, output) = job()
+        if output == '': # fetch failed
+            failedBooks.append(bkid) 
+        else:
+            processedBooks.append(bkid)
+            local_file = open(outputPath + str(bkid), "w")
+            local_file.write(output)
+            local_file.close()
+
+    if (len(processedBooks) > 0):
+        # zip everything up
+        zout = zipfile.ZipFile(zpath,'w',zipfile.ZIP_DEFLATED)
+        for root,dirs,files in os.walk(outputPath):
+            for f in files:
+                zout.write(os.path.join(root, f))
+        zout.close()
+
+        #delete all the files we just zipped 
+        rmall(outputPath)
+
+        uploadSuccess = uploadToS3(zpath)
+        
+        # if we stored it in s3, delete the zipfile and the slice's directory
+        if (uploadSuccess or LocalRun):
+            if not LocalRun: # if it's a local run, leave the zip file where it is
+                rmall(zpath)
+            for b in processedBooks:
+                succeededBooks.append((b, zpath))
+        else:
+            failedBooks = failedBooks + processedBooks
+
+    print "Finished batch of size", len(bslice)
+    count += len(bslice)
     time.sleep(1)
 
 if (len(failedBooks) > 0):
-    local_file = open(basePath + 'incompleteBooks', "w")
+    failedpath = basePath + 'incompleteBooks'
+    local_file = open(failedpath, "w")
     for bkid in failedBooks:
-      local_file.write("%s\n" % bkid)
+      local_file.write(str(bkid) + "\n")
     local_file.close()
+    upsucc = uploadToS3(failedpath)
+    if (upsucc):
+        rmall(failedpath)
 
-
-
-    '''
-    #print book
-#   print count, len(book_set)
-    if count%1000==999 or count-4710000==len(book_set)-2:
-        print "count is ", count
-        print count,"time elapsed:", time.time()-previous_time
-        job_server.print_stats()
-        files = os.listdir("/vol/temp_data/")
-        zout = zipfile.ZipFile("/vol/book_data/"+str(count)+".zip",'w',zipfile.ZIP_DEFLATED)
-        for f in files:
-            zout.write("/vol/temp_data/"+f)
-        zout.close()
-        #to delete all the files in data/
-        files = os.listdir("/vol/temp_data/")
-        for f in files:
-            os.remove("/vol/temp_data/"+f)
-
-    count+=1
-    #url = 'http://www.amazon.com/dp/'+str(book)
-    #file='raw_data1031/'+str(book)+'.txt'
-    #result, success = _fetch_url_(url)
-    if success==True:
-        count+=1
-        print count, book, 'has been crawled'
-        #print result
-        w = open(file,'w')
-        w.write(result)
-        w.close()
-    '''
-
-    #irl = 'http://www.amazon.com/dp/'+str(book)
-   
-    
+if (len(succeededBooks) > 0):
+    manifestPath = basePath + 'book_manifest'
+    local_file = open(manifestPath, "w")
+    for (bkid, zp) in succeededBooks:
+      local_file.write("{0},{1}\n".format(bkid, os.path.basename(zp)))
+    local_file.close()
+    upsucc = uploadToS3(manifestPath)
+    if (upsucc):
+        rmall(manifestPath)

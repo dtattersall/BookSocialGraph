@@ -112,7 +112,7 @@ def uploadToS3(filepath):
         return False
 
     destination = os.path.basename(filepath)
-    cmd = "s3cmd --access_key={0} --secret_key={1} --mime-type=application/zip --no-progress --quiet put {2} s3://{3}/{4}".format(
+    cmd = "/usr/local/bin/s3cmd --access_key={0} --secret_key={1} --mime-type=application/zip --no-progress --quiet put {2} s3://{3}/{4}".format(
             s3info['accesskey'], s3info['secretkey'], filepath, s3info['bucket'], destination)
     exitcode = os.system(cmd)
     print "uploading",filepath,"to S3"

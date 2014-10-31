@@ -8,6 +8,7 @@ import time         # for sleep
 import os
 import shutil
 import sys
+import string
 import urllib2
 import random
 import errno
@@ -59,6 +60,9 @@ def _fetch_url_ (bookid, headers):
             response = urllib2.urlopen(request)
             if response.getcode() == 200:
                 success = True
+                text = response.read()
+            else:
+                print "Received {0} code when retrieving {1}".format(response.getcode(), url)
         except urllib2.HTTPError, e:
             print "When retrieving {0} received HTTP Error: {1}".format(url, e.code)
             if e.code == 404:
@@ -66,14 +70,18 @@ def _fetch_url_ (bookid, headers):
                 ntries = maxTries
         except urllib2.URLError, e:
             print "URL Error:", e.reason , url
+        finally:
+            try:
+                response.close()
+            except NameError: 
+                pass
             
         if success: 
-            text = response.read()
             time.sleep(sleep) # sleep before trying next task 
         else:
             # exponential backoff
             time.sleep(sleep**ntries)
-            ntries+=1
+        ntries+=1
     # note if text is '' then we assume this is an error
     return (bookid, text)
 
@@ -122,21 +130,32 @@ def uploadToS3(filepath):
 
 ########## main ##########
 
-book_ids = args.filename.read().splitlines()
+starttime = time.gmtime() 
+print "Start Time:", time.strftime("%Y-%m-%d %H:%M:%S UTC", starttime)
+
+with open(args.filename) as f:
+    book_ids = f.readlines()
+book_ids = map(lambda x: string.strip(x), book_ids)
 
 # start servers
+totalServers = 1
 if LocalRun:
     job_server = pp.Server()
 else:
     ppservers = tuple(args.nodes.read().splitlines())
+    totalServers = len(ppservers)+1 # +1 for the local node
     #print ppservers
     #print args.secretkey
     # TODO figure out why we can't communicate with other servers
     job_server = pp.Server(ppservers=ppservers) if (args.secretkey == None) else pp.Server(ppservers=ppservers, secret=args.secretkey)
 
 print "Starting pp with", job_server.get_ncpus(), "cpus"
-print "We have", job_server.get_active_nodes(), "nodes"
-
+currentNodeCount = len(job_server.get_active_nodes())
+print "We have", currentNodeCount, "nodes"
+while (currentNodeCount < totalServers):
+    print "Expecting {0} cluster nodes, have {1}, waiting for others to join...".format(totalServers, currentNodeCount)
+    time.sleep(2)
+    currentNodeCount = len(job_server.get_active_nodes())
 
 # set up the temp directory
 try:
@@ -151,7 +170,7 @@ except OSError as exc: # Python >2.5
 
 
 # grab the books 1000 at a time and fetch the urls; wait for the results and then zip them up
-batchSize = 10 if LocalRun else 1000
+batchSize = 10 if LocalRun else 100
 print "Total number of books to process is",len(book_ids)
 failedBooks = []
 succeededBooks = []
@@ -234,3 +253,8 @@ if (len(succeededBooks) > 0):
     upsucc = uploadToS3(manifestPath)
     if (upsucc):
         rmall(manifestPath)
+
+
+endtime = time.gmtime() 
+print "End Time:", time.strftime("%Y-%m-%d %H:%M:%S UTC", endtime)
+print "Total Time:", time.mktime(endtime)-time.mktime(starttime)

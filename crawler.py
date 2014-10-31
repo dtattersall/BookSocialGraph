@@ -17,7 +17,7 @@ import zipfile
 
 
 parser = argparse.ArgumentParser(description='Crawl a set of ISBNs on amazon.com')
-parser.add_argument('-i','--isbns', type=file, dest="filename", required=True, help='The file that contains the ISBNs to crawl')
+parser.add_argument('-i','--isbns', type=file, required=True, help='The file that contains the ISBNs to crawl')
 parser.add_argument('-n','--nodes', type=file, help='The file that contains the cluster slave nodes to use')
 parser.add_argument('-k','--secretkey', type=str, help='The secret key used to communicate with the cluster slave nodes')
 parser.add_argument('-s','--s3credentials', type=file, help='The file containing the S3 credentials required to upload:\n\tbucket=<bucketname>\n\taccessKey=<access key>\n\tsecretKey=<secret key>')
@@ -133,8 +133,7 @@ def uploadToS3(filepath):
 starttime = time.gmtime() 
 print "Start Time:", time.strftime("%Y-%m-%d %H:%M:%S UTC", starttime)
 
-with open(args.filename) as f:
-    book_ids = f.readlines()
+book_ids = args.isbns.read().splitlines()
 book_ids = map(lambda x: string.strip(x), book_ids)
 
 # start servers

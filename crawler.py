@@ -45,8 +45,8 @@ basePath = '/tmp/books/' if LocalRun else '/vol/temp_data/'
 
 # download the contents of a url to the book's directory
 # TODO fix the names 
-#def _dummy_job(bookid, headers):
-def _fetch_url_ (bookid, headers):
+#def _dummy_job(bookid, headers, fpath):
+def _fetch_url_ (bookid, headers, fpath):
     url = 'http://www.amazon.com/dp/'+str(bookid)
     success = False
     maxTries = 5
@@ -61,6 +61,8 @@ def _fetch_url_ (bookid, headers):
             if response.getcode() == 200:
                 success = True
                 text = response.read()
+                with open(fpath, 'wb') as f:
+                    f.write(text)
             else:
                 print "Received {0} code when retrieving {1}".format(response.getcode(), url)
         except urllib2.HTTPError, e:
@@ -80,20 +82,21 @@ def _fetch_url_ (bookid, headers):
             time.sleep(sleep) # sleep before trying next task 
         else:
             # exponential backoff
+            print "Request failed, backing off by", sleep**ntries, "seconds"
             time.sleep(sleep**ntries)
         ntries+=1
     # note if text is '' then we assume this is an error
-    return (bookid, text)
+    return (bookid, success)
 
-#def _fetch_url_ (bookid, headers):
-def _dummy_job(bookid, headers):
+#def _fetch_url_ (bookid, headers, fpath):
+def _dummy_job(bookid, headers, fpath):
     time.sleep(1)
     text = 'Fake book data'
     return (bookid, text)
 
 
-def startJob(bookid,jobserver):
-    path = basePath + str(bookid) 
+def startJob(bookid,jobserver, outputPath):
+    path = outputPath + str(bookid) 
     index = random.randint(0,len(userAgents)-1)
     headers = {
         'User-Agent' : userAgents[index],
@@ -101,9 +104,9 @@ def startJob(bookid,jobserver):
         'Accept-Language' : 'en-US,en;q=0.8'
     }
     def inner():
-        return _fetch_url_(bookid, headers)
+        return _fetch_url_(bookid, headers, path)
 
-    return inner if LocalRun else jobserver.submit(_fetch_url_, (bookid, headers),(),('time','urllib2','pp'))
+    return inner if LocalRun else jobserver.submit(_fetch_url_, (bookid, headers, path),(),('time','urllib2','pp'))
 
 def slicer(seq, size):
     return (seq[pos:pos + size] for pos in xrange(0, len(seq), size))
@@ -169,7 +172,7 @@ except OSError as exc: # Python >2.5
 
 
 # grab the books 1000 at a time and fetch the urls; wait for the results and then zip them up
-batchSize = 10 if LocalRun else 100
+batchSize = 10 if LocalRun else 1000
 print "Total number of books to process is",len(book_ids)
 failedBooks = []
 succeededBooks = []
@@ -182,7 +185,7 @@ for bslice in slicer(book_ids, batchSize):
     processedBooks = []
     
     # Kick off the jobs
-    jobs = map(lambda x: startJob(x,job_server), bslice)
+    jobs = map(lambda x: startJob(x, job_server, outputPath), bslice)
 
     # set up the slice's directory
     try:
@@ -194,18 +197,14 @@ for bslice in slicer(book_ids, batchSize):
             for f in files:
                 rmall(outputPath + f)
             pass
-        else: raise
+        else: 
+            raise exc
 
     # block waiting for all the jobs to complete, then write outputs as appropriate
     for job in jobs:
-        (bkid, output) = job()
-        if output == '': # fetch failed
-            failedBooks.append(bkid) 
-        else:
-            processedBooks.append(bkid)
-            local_file = open(outputPath + str(bkid), "w")
-            local_file.write(output)
-            local_file.close()
+        (bkid, success) = job()
+        lst = processedBooks if success else failedBooks
+        lst.append(bkid) 
 
     if (len(processedBooks) > 0):
         # zip everything up

@@ -49,29 +49,34 @@ basePath = '/tmp/books/' if LocalRun else '/vol/temp_data/'
 def _fetch_url_ (bookid, headers, fpath):
     url = 'http://www.amazon.com/dp/'+str(bookid)
     success = False
+    failfast = False
     maxTries = 5
     ntries = 0
     sleep = 2
     request = urllib2.Request(url,None,headers)
     
-    while not success and ntries < maxTries:
+    while not success and not failfast and ntries < maxTries:
         text = ''
         try: 
             response = urllib2.urlopen(request)
             if response.getcode() == 200:
-                success = True
                 text = response.read()
                 with open(fpath, 'wb') as f:
                     f.write(text)
+                success = True
             else:
                 print "Received {0} code when retrieving {1}".format(response.getcode(), url)
         except urllib2.HTTPError, e:
             print "When retrieving {0} received HTTP Error: {1}".format(url, e.code)
             if e.code == 404:
                 print "received 404, so skipping further retries"
-                ntries = maxTries
+                failfast = True
         except urllib2.URLError, e:
             print "URL Error:", e.reason , url
+        except IOError, e:
+            print "Could not write to file {0} when fetching {1}... skipping this book".format(fpath,url)
+            print "Detailed Exception: ", e
+            failfast = True
         finally:
             try:
                 response.close()
@@ -81,11 +86,11 @@ def _fetch_url_ (bookid, headers, fpath):
         if success: 
             time.sleep(sleep) # sleep before trying next task 
         else:
-            # exponential backoff
-            print "Request failed, backing off by", sleep**ntries, "seconds"
-            time.sleep(sleep**ntries)
+            if not failfast:
+                # exponential backoff
+                print "Attempt {0} for url {1} failed, backing off {2} seconds".format(ntries, url, sleep**ntries)
+                time.sleep(sleep**ntries)
         ntries+=1
-    # note if text is '' then we assume this is an error
     return (bookid, success)
 
 #def _fetch_url_ (bookid, headers, fpath):
@@ -146,9 +151,6 @@ if LocalRun:
 else:
     ppservers = tuple(args.nodes.read().splitlines())
     totalServers = len(ppservers)+1 # +1 for the local node
-    #print ppservers
-    #print args.secretkey
-    # TODO figure out why we can't communicate with other servers
     job_server = pp.Server(ppservers=ppservers) if (args.secretkey == None) else pp.Server(ppservers=ppservers, secret=args.secretkey)
 
 print "Starting pp with", job_server.get_ncpus(), "cpus"
@@ -158,6 +160,7 @@ while (currentNodeCount < totalServers):
     print "Expecting {0} cluster nodes, have {1}, waiting for others to join...".format(totalServers, currentNodeCount)
     time.sleep(2)
     currentNodeCount = len(job_server.get_active_nodes())
+print "All expected nodes have joined"
 
 # set up the temp directory
 try:
@@ -174,10 +177,14 @@ except OSError as exc: # Python >2.5
 # grab the books 1000 at a time and fetch the urls; wait for the results and then zip them up
 batchSize = 10 if LocalRun else 1000
 print "Total number of books to process is",len(book_ids)
-failedBooks = []
-succeededBooks = []
+
+failedBooksPath = basePath + str(time.mktime(time.gmtime())).replace('.','_') + '_incompleteBooks'
+bookManifestPath = basePath + str(time.mktime(time.gmtime())).replace('.','_') + '_book_manifest'
 count = 0
+
 for bslice in slicer(book_ids, batchSize):
+    failedBooks = []
+    succeededBooks = []
     jobs=[]
     sliceName = str(min(bslice)) + '_' + str(max(bslice)) + '_' + str(count) 
     zpath = basePath + sliceName +  '.zip'
@@ -200,11 +207,13 @@ for bslice in slicer(book_ids, batchSize):
         else: 
             raise exc
 
-    # block waiting for all the jobs to complete, then write outputs as appropriate
+    # block waiting for all the jobs to complete
     for job in jobs:
         (bkid, success) = job()
         lst = processedBooks if success else failedBooks
         lst.append(bkid) 
+
+    time.sleep(2)
 
     if (len(processedBooks) > 0):
         # zip everything up
@@ -228,30 +237,30 @@ for bslice in slicer(book_ids, batchSize):
         else:
             failedBooks = failedBooks + processedBooks
 
+    # write to the appropriate files 
+    if (len(failedBooks) > 0):
+        with open(failedBooksPath , "a") as local_file:
+            for bkid in failedBooks:
+              local_file.write(str(bkid) + "\n")
+
+    if (len(succeededBooks) > 0):
+        with open(bookManifestPath, "a") as local_file:
+            for (bkid, zp) in succeededBooks:
+              local_file.write("{0},{1}\n".format(bkid, os.path.basename(zp)))
+
     print "Finished batch of size", len(bslice)
     count += len(bslice)
-    time.sleep(1)
 
-if (len(failedBooks) > 0):
-    failedpath = basePath + 'incompleteBooks'
-    local_file = open(failedpath, "w")
-    for bkid in failedBooks:
-      local_file.write(str(bkid) + "\n")
-    local_file.close()
-    upsucc = uploadToS3(failedpath)
+
+if (os.path.isfile(failedBooksPath)):
+    upsucc = uploadToS3(failedBooksPath)
     if (upsucc):
-        rmall(failedpath)
+        rmall(failedBooksPath)
 
-if (len(succeededBooks) > 0):
-    manifestPath = basePath + 'book_manifest'
-    local_file = open(manifestPath, "w")
-    for (bkid, zp) in succeededBooks:
-      local_file.write("{0},{1}\n".format(bkid, os.path.basename(zp)))
-    local_file.close()
-    upsucc = uploadToS3(manifestPath)
+if (os.path.isfile(bookManifestPath)):
+    upsucc = uploadToS3(bookManifestPath)
     if (upsucc):
-        rmall(manifestPath)
-
+        rmall(bookManifestPath)
 
 endtime = time.gmtime() 
 print "End Time:", time.strftime("%Y-%m-%d %H:%M:%S UTC", endtime)

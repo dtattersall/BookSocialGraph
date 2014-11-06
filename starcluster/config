@@ -36,7 +36,7 @@ INCLUDE=~/.starcluster/configs/aws, ~/.starcluster/configs/keys, ~/.starcluster/
 # change this to the name of one of the keypair sections defined above
 KEYNAME = dtt_awskey
 # number of ec2 instances to launch
-CLUSTER_SIZE = 5
+CLUSTER_SIZE = 20
 # create the following user on the cluster
 CLUSTER_USER = sgeadmin
 # optionally specify shell (defaults to bash)

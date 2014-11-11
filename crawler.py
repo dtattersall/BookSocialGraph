@@ -42,6 +42,7 @@ userAgents = [
     "Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:25.0) Gecko/20100101 Firefox/29.0"
 ]
 basePath = '/tmp/books/' if LocalRun else '/vol/temp_data/'
+basePath = basePath + ''.join(random.choice(string.ascii_uppercase) for i in range(8)) + '/'
 
 # download the contents of a url to the book's directory
 # TODO fix the names 

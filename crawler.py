@@ -45,8 +45,8 @@ basePath = '/tmp/books/' if LocalRun else '/vol/temp_data/'
 basePath = basePath + ''.join(random.choice(string.ascii_uppercase) for i in range(8)) + '/'
 
 # download the contents of a url to the book's directory
-# TODO fix the names 
-#def _dummy_job(bookid, headers, fpath):
+
+#def _dummy_job(bookid, headers, fpath): # useful for debugging to short circuit the fetching
 def _fetch_url_ (bookid, headers, fpath):
     url = 'http://www.amazon.com/dp/'+str(bookid)
     captchaText = '<form method="get" action="/errors/validateCaptcha" name="">'
@@ -197,7 +197,7 @@ for bslice in slicer(book_ids, batchSize):
     processedBooks = []
     
     # Kick off the jobs
-    jobs = map(lambda x: startJob(x, job_server, outputPath), bslice)
+    jobs = map(lambda x: (x, startJob(x, job_server, outputPath)), bslice)
 
     # set up the slice's directory
     try:
@@ -213,8 +213,18 @@ for bslice in slicer(book_ids, batchSize):
             raise exc
 
     # block waiting for all the jobs to complete
-    for job in jobs:
-        (bkid, success) = job()
+    for (bkid,job) in jobs:
+        success = False
+        try:
+            res = job()
+            bkid = res[0]
+            success = res[1]
+        except (KeyboardInterrupt, SystemExit):
+            print "Caught keyboard interrupt/system exit"
+            raise
+        except Exception, e:
+            print "Encountered exception when executing job: ", e
+            
         lst = processedBooks if success else failedBooks
         lst.append(bkid) 
 

@@ -53,11 +53,11 @@ def _fetch_url_ (bookid, headers, fpath):
     success = False
     failfast = False
     maxTries = 5
-    ntries = 0
+    ntries = 1 # 0 doesn't let me multiply well 
     sleep = 2
     request = urllib2.Request(url,None,headers)
     
-    while not success and not failfast and ntries < maxTries:
+    while not success and not failfast and ntries <= maxTries:
         text = ''
         try: 
             response = urllib2.urlopen(request)
@@ -93,8 +93,8 @@ def _fetch_url_ (bookid, headers, fpath):
         else:
             if not failfast:
                 # exponential backoff
-                print "Attempt {0} for url {1} failed, backing off {2} seconds".format(ntries, url, sleep**ntries)
-                time.sleep(sleep**ntries)
+                print "Attempt {0} for url {1} failed, backing off {2} seconds".format(ntries, url, sleep*ntries)
+                time.sleep(sleep*ntries)
         ntries+=1
     return (bookid, success)
 

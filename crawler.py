@@ -49,6 +49,7 @@ basePath = basePath + ''.join(random.choice(string.ascii_uppercase) for i in ran
 #def _dummy_job(bookid, headers, fpath):
 def _fetch_url_ (bookid, headers, fpath):
     url = 'http://www.amazon.com/dp/'+str(bookid)
+    captchaText = '<form method="get" action="/errors/validateCaptcha" name="">'
     success = False
     failfast = False
     maxTries = 5
@@ -62,9 +63,12 @@ def _fetch_url_ (bookid, headers, fpath):
             response = urllib2.urlopen(request)
             if response.getcode() == 200:
                 text = response.read()
-                with open(fpath, 'wb') as f:
-                    f.write(text)
-                success = True
+                if captchaText in text:
+                    print "Got captcha, sleeping and retrying"
+                else:
+                    with open(fpath, 'wb') as f:
+                        f.write(text)
+                    success = True
             else:
                 print "Received {0} code when retrieving {1}".format(response.getcode(), url)
         except urllib2.HTTPError, e:

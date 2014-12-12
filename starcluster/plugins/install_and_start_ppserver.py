@@ -24,8 +24,9 @@ class PackageInstaller(ClusterSetup):
                 slave_aliases.append(node.alias)
 
         hostf = master.ssh.remote_file('/tmp/otherhosts', 'w')
-        hostf.write('\n'.join(slave_aliases))
-        hostf.write('\n')
+        if len(slave_aliases) > 0:
+            hostf.write('\n'.join(slave_aliases))
+            hostf.write('\n')
         hostf.close()
 
         secretf = master.ssh.remote_file('/tmp/secretkey', 'w')

@@ -78,6 +78,53 @@ PLUGINS = usepp, useSThreecmd
 # this template. The following example will place a $0.50 bid for each spot
 # request.
 #SPOT_BID = 0.50
+#
+[cluster extractorcluster]
+# change this to the name of one of the keypair sections defined above
+KEYNAME = dtt_awskey
+# number of ec2 instances to launch
+CLUSTER_SIZE = 50
+# create the following user on the cluster
+CLUSTER_USER = sgeadmin
+# optionally specify shell (defaults to bash)
+# (options: tcsh, zsh, csh, bash, ksh)
+CLUSTER_SHELL = bash
+# AMI to use for cluster nodes. These AMIs are for the us-east-1 region.
+# Use the 'listpublic' command to list StarCluster AMIs in other regions
+# The base i386 StarCluster AMI is ami-899d49e0
+# The base x86_64 StarCluster AMI is ami-999d49f0
+# The base HVM StarCluster AMI is ami-4583572c
+NODE_IMAGE_ID = ami-c2bd30f2
+# instance type for all cluster nodes
+# (options: cg1.4xlarge, c1.xlarge, m1.small, c1.medium, m2.xlarge, t1.micro, cc1.4xlarge, m1.medium, cc2.8xlarge, m1.large, m1.xlarge, m2.4xlarge, m2.2xlarge)
+NODE_INSTANCE_TYPE = t1.micro
+# Uncomment to disable installing/configuring a queueing system on the
+# cluster (SGE)
+#DISABLE_QUEUE=True
+# Uncomment to specify a different instance type for the master node (OPTIONAL)
+# (defaults to NODE_INSTANCE_TYPE if not specified)
+MASTER_INSTANCE_TYPE = t1.micro
+# Uncomment to specify a separate AMI to use for the master node. (OPTIONAL)
+# (defaults to NODE_IMAGE_ID if not specified)
+MASTER_IMAGE_ID = ami-c2bd30f2
+# availability zone to launch the cluster in (OPTIONAL)
+# (automatically determined based on volumes (if any) or
+# selected by Amazon if not specified)
+AVAILABILITY_ZONE = us-west-2c
+# list of volumes to attach to the master node (OPTIONAL)
+# these volumes, if any, will be NFS shared to the worker nodes
+# see "Configuring EBS Volumes" below on how to define volume sections
+VOLUMES = extractor 
+# list of plugins to load after StarCluster's default setup routines (OPTIONAL)
+# see "Configuring StarCluster Plugins" below on how to define plugin sections
+PLUGINS = usepp, boto 
+# list of permissions (or firewall rules) to apply to the cluster's security
+# group (OPTIONAL).
+#PERMISSIONS = ssh, http
+# Uncomment to always create a spot cluster when creating a new cluster from
+# this template. The following example will place a $0.50 bid for each spot
+# request.
+#SPOT_BID = 0.50
 
 [cluster testcluster]
 # change this to the name of one of the keypair sections defined above
@@ -310,6 +357,9 @@ PLUGINS = usepp, useSThreecmd
 # NOTE: myplugin module must either live in ~/.starcluster/plugins or be
 # on your PYTHONPATH
 SETUP_CLASS = install_s3cmd_on_master.PackageInstaller
+
+[plugin boto]
+SETUP_CLASS = starcluster.plugins.boto.BotoPlugin
 
 [plugin usepp]
 # NOTE: myplugin module must either live in ~/.starcluster/plugins or be
